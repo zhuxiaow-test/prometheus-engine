@@ -12,6 +12,7 @@ require (
 	github.com/docker/docker v20.10.7+incompatible // indirect
 	github.com/go-kit/kit v0.10.0
 	github.com/go-logr/logr v0.4.0
+	github.com/go-openapi/spec v0.20.3
 	github.com/golang/protobuf v1.5.2
 	github.com/google/go-cmp v0.5.6
 	github.com/gophercloud/gophercloud v0.18.0 // indirect
@@ -51,6 +52,7 @@ require (
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/code-generator v0.21.2
 	k8s.io/klog/v2 v2.9.0 // indirect
+	k8s.io/kube-openapi v0.0.0-20210305001622-591a79e4bda7
 	sigs.k8s.io/controller-runtime v0.9.2
 	sigs.k8s.io/yaml v1.2.0
 )
