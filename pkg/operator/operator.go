@@ -259,6 +259,9 @@ func (o *Operator) setupAdmissionWebhooks(ctx context.Context, ors ...metav1.Own
 			monitoringv1alpha1.PodMonitoringResource(),
 			monitoringv1alpha1.ClusterPodMonitoringResource(),
 			monitoringv1alpha1.OperatorConfigResource(),
+			monitoringv1alpha1.RulesResource(),
+			monitoringv1alpha1.ClusterRulesResource(),
+			monitoringv1alpha1.GlobalRulesResource(),
 		},
 		ors...,
 	)
@@ -282,6 +285,22 @@ func (o *Operator) setupAdmissionWebhooks(ctx context.Context, ors ...metav1.Own
 		admission.WithCustomValidator(&monitoringv1alpha1.OperatorConfig{}, &operatorConfigValidator{
 			namespace: o.opts.PublicNamespace,
 		}),
+	)
+	s.Register(
+		validatePath(monitoringv1alpha1.RulesResource()),
+		admission.WithCustomValidator(&monitoringv1alpha1.Rules{}, &rulesValidator{
+			opts: o.opts,
+		}),
+	)
+	s.Register(
+		validatePath(monitoringv1alpha1.ClusterRulesResource()),
+		admission.WithCustomValidator(&monitoringv1alpha1.ClusterRules{}, &clusterRulesValidator{
+			opts: o.opts,
+		}),
+	)
+	s.Register(
+		validatePath(monitoringv1alpha1.GlobalRulesResource()),
+		admission.WithCustomValidator(&monitoringv1alpha1.GlobalRules{}, &globalRulesValidator{}),
 	)
 	return nil
 }
@@ -330,7 +349,7 @@ func (o *Operator) ensureCerts(ctx context.Context, dir string) ([]byte, error) 
 		}
 	} else {
 		// Generate kube-apiserver-signed certificate/key pair.
-		fqdn := fmt.Sprintf("system:node:%s.%s.svc", NameOperator, o.opts.OperatorNamespace)
+		fqdn := fmt.Sprintf("%s.%s.svc", NameOperator, o.opts.OperatorNamespace)
 		crt, key, err = CreateSignedKeyPair(ctx, o.kubeClient, fqdn)
 		if err != nil {
 			return nil, errors.Wrap(err, "generating kube-apiserver-signed certificate/key pair")
