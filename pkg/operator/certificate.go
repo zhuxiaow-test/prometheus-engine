@@ -43,8 +43,7 @@ func provisionCSR(client kubernetes.Interface, fqdn string) (string, []byte, err
 	var (
 		template = &x509.CertificateRequest{
 			Subject: pkix.Name{
-				CommonName:   fqdn,
-				Organization: []string{"system:nodes"},
+				CommonName: fqdn,
 			},
 			DNSNames: []string{fqdn},
 		}

@@ -16,21 +16,26 @@ package operator
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"path/filepath"
+	"time"
 	"strconv"
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	certificatesv1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeutil "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
+	certificatesclient "k8s.io/client-go/kubernetes/typed/certificates/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -245,63 +250,78 @@ func New(logger logr.Logger, clientConfig *rest.Config, registry prometheus.Regi
 // custom resources and registers handlers with the webhook server.
 // The passsed owner references are set on the created WebhookConfiguration resources.
 func (o *Operator) setupAdmissionWebhooks(ctx context.Context, ors ...metav1.OwnerReference) error {
-	crt, err := o.ensureCerts(ctx, o.manager.GetWebhookServer().CertDir)
+	store, err := o.ensureCerts(ctx, o.manager.GetWebhookServer().CertDir)
 	if err != nil {
 		return err
 	}
 
-	whCfg := validatingWebhookConfig(
-		NameOperator,
-		o.opts.OperatorNamespace,
-		int32(o.manager.GetWebhookServer().Port),
-		crt,
-		[]metav1.GroupVersionResource{
-			monitoringv1alpha1.PodMonitoringResource(),
-			monitoringv1alpha1.ClusterPodMonitoringResource(),
-			monitoringv1alpha1.OperatorConfigResource(),
-			monitoringv1alpha1.RulesResource(),
-			monitoringv1alpha1.ClusterRulesResource(),
-			monitoringv1alpha1.GlobalRulesResource(),
-		},
-		ors...,
-	)
-	// Idempotently request validation webhook spec with caBundle and endpoints.
-	_, err = upsertValidatingWebhookConfig(ctx, o.kubeClient.AdmissionregistrationV1().ValidatingWebhookConfigurations(), whCfg)
-	if err != nil {
-		return err
-	}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+				crt, err := store.Current()
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
 
-	s := o.manager.GetWebhookServer()
-	s.Register(
-		validatePath(monitoringv1alpha1.PodMonitoringResource()),
-		admission.ValidatingWebhookFor(&monitoringv1alpha1.PodMonitoring{}),
-	)
-	s.Register(
-		validatePath(monitoringv1alpha1.ClusterPodMonitoringResource()),
-		admission.ValidatingWebhookFor(&monitoringv1alpha1.ClusterPodMonitoring{}),
-	)
-	s.Register(
-		validatePath(monitoringv1alpha1.OperatorConfigResource()),
-		admission.WithCustomValidator(&monitoringv1alpha1.OperatorConfig{}, &operatorConfigValidator{
-			namespace: o.opts.PublicNamespace,
-		}),
-	)
-	s.Register(
-		validatePath(monitoringv1alpha1.RulesResource()),
-		admission.WithCustomValidator(&monitoringv1alpha1.Rules{}, &rulesValidator{
-			opts: o.opts,
-		}),
-	)
-	s.Register(
-		validatePath(monitoringv1alpha1.ClusterRulesResource()),
-		admission.WithCustomValidator(&monitoringv1alpha1.ClusterRules{}, &clusterRulesValidator{
-			opts: o.opts,
-		}),
-	)
-	s.Register(
-		validatePath(monitoringv1alpha1.GlobalRulesResource()),
-		admission.WithCustomValidator(&monitoringv1alpha1.GlobalRules{}, &globalRulesValidator{}),
-	)
+				whCfg := validatingWebhookConfig(
+					NameOperator,
+					o.opts.OperatorNamespace,
+					int32(o.manager.GetWebhookServer().Port),
+					crt,
+					[]metav1.GroupVersionResource{
+						monitoringv1alpha1.PodMonitoringResource(),
+						monitoringv1alpha1.ClusterPodMonitoringResource(),
+						monitoringv1alpha1.OperatorConfigResource(),
+						monitoringv1alpha1.RulesResource(),
+						monitoringv1alpha1.ClusterRulesResource(),
+						monitoringv1alpha1.GlobalRulesResource(),
+					},
+					ors...,
+				)
+				// Idempotently request validation webhook spec with caBundle and endpoints.
+				_, err = upsertValidatingWebhookConfig(ctx, o.kubeClient.AdmissionregistrationV1().ValidatingWebhookConfigurations(), whCfg)
+				if err != nil {
+					return err
+				}
+
+				s := o.manager.GetWebhookServer()
+				s.Register(
+					validatePath(monitoringv1alpha1.PodMonitoringResource()),
+					admission.ValidatingWebhookFor(&monitoringv1alpha1.PodMonitoring{}),
+				)
+				s.Register(
+					validatePath(monitoringv1alpha1.ClusterPodMonitoringResource()),
+					admission.ValidatingWebhookFor(&monitoringv1alpha1.ClusterPodMonitoring{}),
+				)
+				s.Register(
+					validatePath(monitoringv1alpha1.OperatorConfigResource()),
+					admission.WithCustomValidator(&monitoringv1alpha1.OperatorConfig{}, &operatorConfigValidator{
+						namespace: o.opts.PublicNamespace,
+					}),
+				)
+				s.Register(
+					validatePath(monitoringv1alpha1.RulesResource()),
+					admission.WithCustomValidator(&monitoringv1alpha1.Rules{}, &rulesValidator{
+						opts: o.opts,
+					}),
+				)
+				s.Register(
+					validatePath(monitoringv1alpha1.ClusterRulesResource()),
+					admission.WithCustomValidator(&monitoringv1alpha1.ClusterRules{}, &clusterRulesValidator{
+						opts: o.opts,
+					}),
+				)
+				s.Register(
+					validatePath(monitoringv1alpha1.GlobalRulesResource()),
+					admission.WithCustomValidator(&monitoringv1alpha1.GlobalRules{}, &globalRulesValidator{}),
+				)
+			}
+		}
+	}()
 	return nil
 }
 
@@ -331,39 +351,89 @@ func (o *Operator) Run(ctx context.Context, ors ...metav1.OwnerReference) error 
 
 // ensureCerts writes the cert/key files to the specified directory.
 // If cert/key are not avalilable, generate them.
-func (o *Operator) ensureCerts(ctx context.Context, dir string) ([]byte, error) {
-	var (
-		crt, key []byte
-		err      error
-	)
-	if (len(o.opts.Key) == 0 && len(o.opts.Cert) > 0) || (len(o.opts.Cert) == 0 && len(o.opts.Key) > 0) {
+func (o *Operator) ensureCerts(ctx context.Context, dir string) (certificate.Store, error) {
+	if len(o.opts.Key) != len(o.opts.Cert) > 0 {
 		return nil, errors.Errorf("Flags key-base64 and cert-base64 must both be set.")
-	} else if len(o.opts.Key) > 0 && len(o.opts.Cert) > 0 {
-		crt, err = base64.StdEncoding.DecodeString(o.opts.Cert)
+	}
+	store, err := certificate.NewFileStore("", dir, dir, "tls.crt", "tls.key")
+	if err != nil {
+		return nil, err
+	}
+	if len(o.opts.Key) > 0 && len(o.opts.Cert) > 0 {
+		crt, err := base64.StdEncoding.DecodeString(o.opts.Cert)
 		if err != nil {
 			return nil, errors.Wrap(err, "decoding TLS certificate")
 		}
-		key, err = base64.StdEncoding.DecodeString(o.opts.Key)
+		key, err := base64.StdEncoding.DecodeString(o.opts.Key)
 		if err != nil {
 			return nil, errors.Wrap(err, "decoding TLS key")
 		}
-	} else {
-		// Generate kube-apiserver-signed certificate/key pair.
-		fqdn := fmt.Sprintf("%s.%s.svc", NameOperator, o.opts.OperatorNamespace)
-		crt, key, err = CreateSignedKeyPair(ctx, o.kubeClient, fqdn)
-		if err != nil {
-			return nil, errors.Wrap(err, "generating kube-apiserver-signed certificate/key pair")
+		if err := ioutil.WriteFile(filepath.Join(dir, "tls.crt"), crt, 0666); err != nil {
+			return nil, errors.Wrap(err, "create cert file")
 		}
+		if err := ioutil.WriteFile(filepath.Join(dir, "tls.key"), key, 0666); err != nil {
+			return nil, errors.Wrap(err, "create key file")
+		}
+		return store, nil
 	}
 
-	if err := ioutil.WriteFile(filepath.Join(dir, "tls.crt"), crt, 0666); err != nil {
-		return nil, errors.Wrap(err, "create cert file")
+	clientFn := func(_ *tls.Certificate) (certificatesclient.CertificateSigningRequestInterface, error) {
+		return o.kubeClient.CertificatesV1beta1().CertificateSigningRequests(), nil
 	}
-	if err := ioutil.WriteFile(filepath.Join(dir, "tls.key"), key, 0666); err != nil {
-		return nil, errors.Wrap(err, "create key file")
+	store, err := certificate.NewFileStore("", dir, dir, "tls.crt", "tls.key")
+	if err != nil {
+		return nil, err
 	}
+	fqdn := fmt.Sprintf("%s.%s.svc", NameOperator, o.opts.OperatorNamespace)
 
-	return crt, nil
+	template := &x509.CertificateRequest{
+		Subject: pkix.Name{
+			CommonName: fqdn,
+		},
+		DNSNames: []string{fqdn},
+	}
+	var certificateRotation = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Subsystem: "certificate_manager",
+			Name:      "server_rotation_seconds",
+			Help:      "Histogram of the lifetime of a certificate. The value is the time in seconds the certificate lived before getting rotated",
+		},
+	)
+	prometheus.MustRegister(certificateRotation)
+
+	// If no explicit certs were provided, create our own
+	mgr, err := certificate.NewManager(&certificate.Config{
+		ClientFn: clientFn,
+		Template: template,
+		Usages: []certificatesv1.KeyUsage{
+			certificatesv1.UsageDigitalSignature,
+			certificatesv1.UsageKeyEncipherment,
+			certificatesv1.UsageServerAuth,
+		},
+		SignerName:          certificates.KubeAPIServerClientSignerName,
+		CertificateStore:    store,
+		CertificateRotation: certificateRotation,
+	})
+	if err != nil {
+		return nil, err
+	}
+	mgr.Start()
+
+	go func() {
+		<-ctx.Done()
+		defer mgr.Stop()
+	}()
+	return store, nil
+
+	// 	// Generate kube-apiserver-signed certificate/key pair.
+	// 	fqdn := fmt.Sprintf("%s.%s.svc", NameOperator, o.opts.OperatorNamespace)
+	// 	crt, key, err = CreateSignedKeyPair(ctx, o.kubeClient, fqdn)
+	// 	if err != nil {
+	// 		return nil, errors.Wrap(err, "generating kube-apiserver-signed certificate/key pair")
+	// 	}
+	// }
+
+	// return crt, nil
 }
 
 // namespacedNamePredicate is an event filter predicate that only allows events with
