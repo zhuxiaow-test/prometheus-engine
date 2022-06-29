@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 )
@@ -200,6 +201,15 @@ type SecretOrConfigMap struct {
 	ConfigMap *v1.ConfigMapKeySelector `json:"configMap,omitempty"`
 }
 
+// PodMonitoringStatusContainer represents a Kubernetes CRD that monitors pods
+// and contains a status sub-resource.
+type PodMonitoringStatusContainer interface {
+	client.Object
+
+	// Returns this CRD's status sub-resource.
+	GetStatus() *PodMonitoringStatus
+}
+
 // PodMonitoring defines monitoring for a set of pods.
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -214,6 +224,10 @@ type PodMonitoring struct {
 	// Most recently observed status of the resource.
 	// +optional
 	Status PodMonitoringStatus `json:"status"`
+}
+
+func (p *PodMonitoring) GetStatus() *PodMonitoringStatus {
+	return &p.Status
 }
 
 // PodMonitoringList is a list of PodMonitorings.
@@ -240,6 +254,10 @@ type ClusterPodMonitoring struct {
 	// Most recently observed status of the resource.
 	// +optional
 	Status PodMonitoringStatus `json:"status"`
+}
+
+func (p *ClusterPodMonitoring) GetStatus() *PodMonitoringStatus {
+	return &p.Status
 }
 
 // ClusterPodMonitoringList is a list of ClusterPodMonitorings.

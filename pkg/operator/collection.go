@@ -16,6 +16,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
@@ -124,7 +125,7 @@ func setupCollectionControllers(op *Operator) error {
 type collectionReconciler struct {
 	client        client.Client
 	opts          Options
-	statusUpdates []client.Object
+	statusUpdates []monitoringv1.PodMonitoringStatusContainer
 }
 
 func newCollectionReconciler(c client.Client, opts Options) *collectionReconciler {
@@ -132,6 +133,20 @@ func newCollectionReconciler(c client.Client, opts Options) *collectionReconcile
 		client: c,
 		opts:   opts,
 	}
+}
+
+func patchCollectionStatus(ctx context.Context, kubeClient client.Client, statusContainer monitoringv1.PodMonitoringStatusContainer) error {
+	// TODO(TheSpiritXIII): In the future, change this to server side apply as opposed to patch.
+	patchStatus := map[string]interface{}{"conditions": statusContainer.GetStatus().Conditions, "observedGeneration": statusContainer.GetStatus().ObservedGeneration}
+	patch := map[string]interface{}{"status": patchStatus}
+	patchBytes, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	if err := kubeClient.Status().Patch(ctx, statusContainer, client.RawPatch(types.MergePatchType, patchBytes)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *collectionReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -160,7 +175,7 @@ func (r *collectionReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 
 	// Reconcile any status updates.
 	for _, obj := range r.statusUpdates {
-		if err := r.client.Status().Update(ctx, obj); err != nil {
+		if err := patchCollectionStatus(ctx, r.client, obj); err != nil {
 			logger.Error(err, "update status", "obj", obj)
 		}
 	}
