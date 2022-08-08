@@ -557,9 +557,14 @@ func TestWebhookCABundleInjection(t *testing.T) {
 	}
 }
 
-// testCollectorDeployed does a high-level verification on whether the
-// collector is deployed to the cluster.
-func testCollectorDeployed(ctx context.Context, t *testContext) {
+func ensureOperatorConfigsExist(ctx context.Context, t *testContext) error {
+	_, err := t.operatorClient.MonitoringV1().OperatorConfigs(t.pubNamespace).Get(ctx, operator.NameOperatorConfig, metav1.GetOptions{})
+	if err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+
 	// Create initial OperatorConfig to trigger deployment of resources.
 	opCfg := &monitoringv1.OperatorConfig{
 		ObjectMeta: metav1.ObjectMeta{
@@ -588,12 +593,18 @@ func testCollectorDeployed(ctx context.Context, t *testContext) {
 			Key: "key.json",
 		}
 	}
-	_, err := t.operatorClient.MonitoringV1().OperatorConfigs(t.pubNamespace).Create(ctx, opCfg, metav1.CreateOptions{})
-	if err != nil {
+	_, err = t.operatorClient.MonitoringV1().OperatorConfigs(t.pubNamespace).Create(ctx, opCfg, metav1.CreateOptions{})
+	return err
+}
+
+// testCollectorDeployed does a high-level verification on whether the
+// collector is deployed to the cluster.
+func testCollectorDeployed(ctx context.Context, t *testContext) {
+	if err := ensureOperatorConfigsExist(ctx, t); err != nil {
 		t.Fatalf("create rules operatorconfig: %s", err)
 	}
 
-	err = wait.Poll(3*time.Second, 3*time.Minute, func() (bool, error) {
+	err := wait.Poll(3*time.Second, 3*time.Minute, func() (bool, error) {
 		ds, err := t.kubeClient.AppsV1().DaemonSets(t.namespace).Get(ctx, operator.NameCollector, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			return false, nil
@@ -667,6 +678,10 @@ func testCollectorDeployed(ctx context.Context, t *testContext) {
 // testCollectorSelfPodMonitoring sets up pod monitoring of the collector itself
 // and waits for samples to become available in Cloud Monitoring.
 func testCollectorSelfPodMonitoring(ctx context.Context, t *testContext) {
+	if err := ensureOperatorConfigsExist(ctx, t); err != nil {
+		t.Fatalf("create rules operatorconfig: %s", err)
+	}
+
 	// The operator should configure the collector to scrape itself and its metrics
 	// should show up in Cloud Monitoring shortly after.
 	podmon := &monitoringv1.PodMonitoring{
@@ -718,6 +733,16 @@ func testCollectorSelfPodMonitoring(ctx context.Context, t *testContext) {
 	if err != nil {
 		t.Errorf("unable to validate PodMonitoring status: %s", err)
 	}
+	err = checkEndpointStatus(t.T, func() (monitoringv1.PodMonitoringStatusContainer, error) {
+		pm, err := t.operatorClient.MonitoringV1().PodMonitorings(t.namespace).Get(ctx, "collector-podmon", metav1.GetOptions{})
+		if err != nil {
+			return nil, errors.Errorf("getting PodMonitoring failed: %s", err)
+		}
+		return pm, nil
+	})
+	if err != nil {
+		t.Errorf("unable to validate target status: %s", err)
+	}
 
 	if !skipGCM {
 		t.Log("Waiting for up metrics for collector targets")
@@ -728,6 +753,10 @@ func testCollectorSelfPodMonitoring(ctx context.Context, t *testContext) {
 // testCollectorSelfClusterPodMonitoring sets up pod monitoring of the collector itself
 // and waits for samples to become available in Cloud Monitoring.
 func testCollectorSelfClusterPodMonitoring(ctx context.Context, t *testContext) {
+	if err := ensureOperatorConfigsExist(ctx, t); err != nil {
+		t.Fatalf("create rules operatorconfig: %s", err)
+	}
+
 	// The operator should configure the collector to scrape itself and its metrics
 	// should show up in Cloud Monitoring shortly after.
 	podmon := &monitoringv1.ClusterPodMonitoring{
@@ -752,7 +781,7 @@ func testCollectorSelfClusterPodMonitoring(ctx context.Context, t *testContext) 
 	if err != nil {
 		t.Fatalf("create collector ClusterPodMonitoring: %s", err)
 	}
-	t.Log("Waiting for PodMonitoring collector-podmon to be processed")
+	t.Log("Waiting for ClusterPodMonitoring collector-cmon to be processed")
 
 	var resVer = ""
 	err = wait.Poll(time.Second, 1*time.Minute, func() (bool, error) {
@@ -779,6 +808,16 @@ func testCollectorSelfClusterPodMonitoring(ctx context.Context, t *testContext) 
 	})
 	if err != nil {
 		t.Errorf("unable to validate ClusterPodMonitoring status: %s", err)
+	}
+	err = checkEndpointStatus(t.T, func() (monitoringv1.PodMonitoringStatusContainer, error) {
+		pm, err := t.operatorClient.MonitoringV1().ClusterPodMonitorings().Get(ctx, "collector-cmon", metav1.GetOptions{})
+		if err != nil {
+			return nil, errors.Errorf("getting PodMonitoring failed: %s", err)
+		}
+		return pm, nil
+	})
+	if err != nil {
+		t.Errorf("unable to validate target status: %s", err)
 	}
 
 	if !skipGCM {
@@ -965,6 +1004,47 @@ func testCollectorScrapeKubelet(ctx context.Context, t *testContext) {
 			}
 		}
 	}
+}
+
+func checkEndpointStatus(t *testing.T, getStatusContainer func() (monitoringv1.PodMonitoringStatusContainer, error)) error {
+	wait.Poll(time.Second, 3*time.Minute, func() (bool, error) {
+		statusContainer, err := getStatusContainer()
+		if err != nil {
+			return false, err
+		}
+		endpointStatuses := statusContainer.GetStatus().EndpointStatuses
+		if len(endpointStatuses) == 0 {
+			return false, nil
+		}
+		for _, status := range endpointStatuses {
+			if status.UnhealthyTargets != 0 {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	statusContainer, err := getStatusContainer()
+	if err != nil {
+		return err
+	}
+	endpointStatuses := statusContainer.GetStatus().EndpointStatuses
+	if len(endpointStatuses) == 0 {
+		t.Error("Empty target status")
+	}
+	for _, status := range endpointStatuses {
+		if status.UnhealthyTargets != 0 {
+			t.Errorf("Found unhealthy targets for status %s: %d", status.Name, status.UnhealthyTargets)
+		}
+		if status.CollectorsFraction != "1" {
+			t.Errorf("Found collectors failed for status: %s: %s", status.Name, status.CollectorsFraction)
+		}
+		if len(status.SampleGroups) == 0 {
+			t.Errorf("Missing sample groups for status %s", status.Name)
+		} else if len(status.SampleGroups[0].SampleTargets) == 0 {
+			t.Errorf("Missing sample targets for status %s: %d", status.Name, status.SampleGroups[0].Count)
+		}
+	}
+	return nil
 }
 
 func testRulesGeneration(ctx context.Context, t *testContext) {

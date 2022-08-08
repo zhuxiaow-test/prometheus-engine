@@ -99,12 +99,14 @@ func newTestContext(t *testing.T) *testContext {
 	}
 
 	op, err := operator.New(globalLogger, kubeconfig, prometheus.NewRegistry(), operator.Options{
-		ProjectID:         projectID,
-		Cluster:           cluster,
-		Location:          location,
-		OperatorNamespace: tctx.namespace,
-		PublicNamespace:   tctx.pubNamespace,
-		ListenAddr:        ":10250",
+		ProjectID:                    projectID,
+		Cluster:                      cluster,
+		Location:                     location,
+		OperatorNamespace:            tctx.namespace,
+		PublicNamespace:              tctx.pubNamespace,
+		ListenAddr:                   ":10250",
+		TargetPollPortForwardEnabled: true,
+		TargetPollPortForwardPort:    19090,
 	})
 	if err != nil {
 		t.Fatalf("instantiating operator: %s", err)

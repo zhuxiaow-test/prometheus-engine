@@ -77,14 +77,20 @@ const (
 	KubernetesAppName    = "app"
 	RuleEvaluatorAppName = "managed-prometheus-rule-evaluator"
 	AlertmanagerAppName  = "managed-prometheus-alertmanager"
+
+	// How often to poll the targets.
+	targetPollInterval = 10 * time.Second
+	// How many concurrency threads to use to fetch all targets.
+	defaultTargetPollConcurrency = 4
 )
 
 // Operator to implement managed collection for Google Prometheus Engine.
 type Operator struct {
-	logger  logr.Logger
-	opts    Options
-	client  client.Client
-	manager manager.Manager
+	logger       logr.Logger
+	opts         Options
+	client       client.Client
+	targetStatus TargetStatusProcessor
+	manager      manager.Manager
 	// Due to the RBAC, the manager can only handle a single namespace per
 	// object at a time so this cache is used in cases where we want the same
 	// resource from multiple namespaces (not to be confused with cluster-wide
@@ -115,6 +121,21 @@ type Options struct {
 	ListenAddr string
 	// Cleanup resources without this annotation.
 	CleanupAnnotKey string
+	// Whether to disable target polling.
+	TargetPollDisabled bool
+	// The number of upper bound threads to use for target polling otherwise
+	// use the default.
+	TargetPollConcurrency uint16
+	// Whether to use port forwarding for target polling for use when running
+	// the operator locally.
+	TargetPollPortForwardEnabled bool
+	// The first of a range of ports to use with target polling port forwarding
+	// when enabled via `TargetStatusPortForwardEnabled`. The range will be
+	// `TargetStatusConcurrency` long.
+	TargetPollPortForwardPort int32
+	// Disables use of Google Cloud HTTP client, primarily used in places such
+	// as tests where the operator doesn't run under Google Cloud.
+	TargetPollNoGoogleCloudHTTP bool
 }
 
 func (o *Options) defaultAndValidate(logger logr.Logger) error {
@@ -135,6 +156,16 @@ func (o *Options) defaultAndValidate(logger logr.Logger) error {
 	}
 	if o.Cluster == "" {
 		return errors.New("Cluster must be set")
+	}
+
+	if o.TargetPollConcurrency == 0 {
+		o.TargetPollConcurrency = defaultTargetPollConcurrency
+	}
+	if o.TargetPollPortForwardPort < 0 {
+		return errors.New("Invalid target poll port")
+	}
+	if o.TargetPollPortForwardEnabled && o.TargetPollPortForwardPort == 0 {
+		return errors.New("`TargetPollPortForwardPort` must be set")
 	}
 	return nil
 }
@@ -246,10 +277,20 @@ func New(logger logr.Logger, clientConfig *rest.Config, registry prometheus.Regi
 		return nil, errors.Wrap(err, "create client")
 	}
 
+	var targetStatus TargetStatusProcessor
+	if !opts.TargetPollDisabled {
+		var err error
+		targetStatus, err = NewTargetStatusPoller(logger, clientConfig, registry, opts)
+		if err != nil {
+			return nil, errors.Wrap(err, "create target status processor")
+		}
+	}
+
 	op := &Operator{
 		logger:                 logger,
 		opts:                   opts,
 		client:                 client,
+		targetStatus:           targetStatus,
 		manager:                manager,
 		managedNamespacesCache: managedNamespacesCache,
 	}
@@ -356,6 +397,19 @@ func (o *Operator) Run(ctx context.Context) error {
 	}
 	if err := setupOperatorConfigControllers(o); err != nil {
 		return errors.Wrap(err, "setup rule-evaluator controllers")
+	}
+	if o.targetStatus != nil {
+		go func() {
+			tickerBuilder := func() Ticker {
+				return NewTicker(targetPollInterval)
+			}
+			o.logger.Info("starting target status reporting polling")
+			for {
+				if err := o.targetStatus.Start(ctx, tickerBuilder); err != nil {
+					o.logger.Error(err, "traget status reporting polling failed")
+				}
+			}
+		}()
 	}
 
 	o.logger.Info("starting GMP operator")
