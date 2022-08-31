@@ -23,7 +23,7 @@ webhooks:
   clientConfig:
     # caBundle populated by operator.
     service:
-      namespace: gmp-system
+      namespace: {{.GMPSystemNamespace}}
       name: gmp-operator
       path: /validate/monitoring.googleapis.com/v1/podmonitorings
       port: 443
@@ -45,7 +45,7 @@ webhooks:
   clientConfig:
     # caBundle populated by operator.
     service:
-      namespace: gmp-system
+      namespace: {{.GMPSystemNamespace}}
       name: gmp-operator
       path: /validate/monitoring.googleapis.com/v1/clusterpodmonitorings
       port: 443
@@ -67,7 +67,7 @@ webhooks:
   clientConfig:
     # caBundle populated by operator.
     service:
-      namespace: gmp-system
+      namespace: {{.GMPSystemNamespace}}
       name: gmp-operator
       path: /validate/monitoring.googleapis.com/v1/rules
       port: 443
@@ -89,7 +89,7 @@ webhooks:
   clientConfig:
     # caBundle populated by operator.
     service:
-      namespace: gmp-system
+      namespace: {{.GMPSystemNamespace}}
       name: gmp-operator
       path: /validate/monitoring.googleapis.com/v1/clusterrules
       port: 443
@@ -111,7 +111,7 @@ webhooks:
   clientConfig:
     # caBundle populated by operator.
     service:
-      namespace: gmp-system
+      namespace: {{.GMPSystemNamespace}}
       name: gmp-operator
       path: /validate/monitoring.googleapis.com/v1/globalrules
       port: 443
@@ -133,7 +133,7 @@ webhooks:
   clientConfig:
     # caBundle populated by operator.
     service:
-      namespace: gmp-system
+      namespace: {{.GMPSystemNamespace}}
       name: gmp-operator
       path: /validate/monitoring.googleapis.com/v1/operatorconfigs
       port: 443

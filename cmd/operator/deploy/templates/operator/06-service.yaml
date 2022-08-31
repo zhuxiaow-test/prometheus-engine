@@ -13,11 +13,24 @@
 # limitations under the License.
 
 apiVersion: v1
-kind: Namespace
+kind: Service
 metadata:
-  name: gmp-system
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: gmp-public
+  namespace: {{.GMPSystemNamespace}}
+  name: gmp-operator
+spec:
+  selector:
+    app.kubernetes.io/name: gmp-operator
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/part-of: gmp
+  ports:
+  # This port does not do anything, but allows upgrades in the case
+  # of server-side apply (SSA) conflicts.
+  # TODO(pintohutch): remove once the SSA issues from upgrades are resolved.
+  - protocol: TCP
+    port: 8443
+    targetPort: webhook
+    name: legacy
+  - protocol: TCP
+    port: 443
+    targetPort: web
+    name: webhook

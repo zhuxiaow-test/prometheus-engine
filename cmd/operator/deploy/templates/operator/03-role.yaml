@@ -35,7 +35,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  namespace: gmp-system
+  namespace: {{.GMPSystemNamespace}}
   name: operator
 rules:
 - apiGroups: [""]
@@ -79,7 +79,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  namespace: gmp-public
+  namespace: {{.GMPPublicNamespace}}
   name: operator
 rules:
 - apiGroups: [""]

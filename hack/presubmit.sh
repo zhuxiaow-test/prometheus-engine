@@ -84,7 +84,7 @@ update_crdgen() {
   which controller-gen || go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.7.0
 
   API_DIR=${SCRIPT_ROOT}/pkg/operator/apis/...
-  CRD_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/crds
+  CRD_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/out/crds
 
   controller-gen crd paths=./$API_DIR output:crd:dir=$CRD_DIR
 
@@ -115,9 +115,9 @@ update_docgen() {
 update_manifests() {
   echo ">>> regenerating example yamls"
 
-  CRD_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/crds
-  OP_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/operator
-  RE_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/rule-evaluator
+  CRD_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/out/crds
+  OP_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/out/operator
+  RE_DIR=${SCRIPT_ROOT}/cmd/operator/deploy/out/rule-evaluator
 
   combine $CRD_DIR '^.*/.*.yaml$' ${SCRIPT_ROOT}/manifests/setup.yaml
   combine $OP_DIR '^.*/[0-9][0-9]-\w.*.yaml$' ${SCRIPT_ROOT}/manifests/operator.yaml
@@ -133,6 +133,10 @@ reformat() {
   go mod tidy && go mod vendor && go fmt ${SCRIPT_ROOT}/...
 }
 
+expand_manifest_templates() {
+  go run ${SCRIPT_ROOT}/hack/templatize.go
+}
+
 exit_msg() {
   echo $1
   exit 1
@@ -143,6 +147,7 @@ update_all() {
   # from the origin/main branch.
   codegen_diff || update_codegen
   reformat
+  expand_manifest_templates
   update_crdgen
   update_manifests
   update_docgen
@@ -161,6 +166,7 @@ main() {
           update_codegen
           ;;
         crdgen)
+          expand_manifest_templates
           update_crdgen
           ;;
         diff)
@@ -171,6 +177,7 @@ main() {
           update_docgen
           ;;
         manifests)
+          expand_manifest_templates
           update_manifests
           ;;
         format)

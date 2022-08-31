@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: monitoring.googleapis.com/v1
-kind: OperatorConfig
+apiVersion: v1
+kind: Namespace
 metadata:
-  namespace: gmp-public
-  name: config
+  name: {{.GMPSystemNamespace}}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{.GMPPublicNamespace}}

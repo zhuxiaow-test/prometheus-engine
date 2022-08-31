@@ -14,7 +14,7 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  namespace: gmp-system
+  namespace: {{.GMPSystemNamespace}}
   name: alertmanager
 type: Opaque
 data:
@@ -23,7 +23,7 @@ data:
 apiVersion: v1
 kind: Service
 metadata:
-  namespace: gmp-system
+  namespace: {{.GMPSystemNamespace}}
   name: alertmanager
 spec:
   selector:
@@ -37,7 +37,7 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  namespace: gmp-system
+  namespace: {{.GMPSystemNamespace}}
   name: alertmanager
 spec:
   selector:
@@ -96,7 +96,7 @@ spec:
           seccompProfile:
             type: RuntimeDefault
       - name: config-reloader
-        image: gke.gcr.io/prometheus-engine/config-reloader:v0.4.1-gke.0
+        image: {{.ConfigReloaderImage}}
         args:
         - --config-file=/alertmanager/config.yaml
         - --config-file-output=/alertmanager/config_out/config.yaml

@@ -15,7 +15,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  namespace: gmp-system
+  namespace: {{.GMPSystemNamespace}}
   name: gmp-operator
   labels:
     app: managed-prometheus-operator
@@ -41,7 +41,7 @@ spec:
       automountServiceAccountToken: true
       containers:
       - name: operator
-        image: gke.gcr.io/prometheus-engine/operator:v0.4.3-gke.0
+        image: {{.OperatorImage}}
         args:
         - "--operator-namespace=gmp-system"
         - "--public-namespace=gmp-public"
