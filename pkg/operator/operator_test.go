@@ -98,7 +98,7 @@ func TestEnsureCertsExplicit(t *testing.T) {
 			op := Operator{
 				opts: tc.opts,
 			}
-			caBundle, err := op.ensureCerts(context.Background(), dir)
+			caBundle, err := op.webhookManager.ensureCerts(context.Background(), dir)
 			if (err == nil && tc.expectErr) || (err != nil && !tc.expectErr) {
 				t.Fatalf("want err: %v; got %v", tc.expectErr, err)
 			}
@@ -147,7 +147,7 @@ func TestEnsureCertsSelfSigned(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			op := Operator{opts: tc.opts}
 
-			caBundle, err := op.ensureCerts(ctx, dir)
+			caBundle, err := op.webhookManager.ensureCerts(ctx, dir)
 			if (err == nil && tc.expectErr) || (err != nil && !tc.expectErr) {
 				t.Fatalf("want err: %v; got %v", tc.expectErr, err)
 			}
