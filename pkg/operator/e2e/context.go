@@ -64,7 +64,16 @@ type testContext struct {
 	operatorClient clientset.Interface
 }
 
+// Returns true if we are running this integration test in Github Actions.
+func isGithubActions() bool {
+	return os.Getenv("GITHUB_ACTIONS") == "true"
+}
+
 func newTestContext(t *testing.T) *testContext {
+	return newTestContextWithTargetPoll(t, !isGithubActions())
+}
+
+func newTestContextWithTargetPoll(t *testing.T, useTargetPoll bool) *testContext {
 	kubeClient, err := kubernetes.NewForConfig(kubeconfig)
 	if err != nil {
 		t.Fatalf("Build Kubernetes clientset: %s", err)
@@ -98,6 +107,7 @@ func newTestContext(t *testing.T) *testContext {
 		t.Fatalf("create test namespace: %s", err)
 	}
 
+	targetPollNoGoogleCloudHTTP := gcpServiceAccount == "" || skipGCM
 	op, err := operator.New(globalLogger, kubeconfig, prometheus.NewRegistry(), operator.Options{
 		ProjectID:                    projectID,
 		Cluster:                      cluster,
@@ -106,8 +116,15 @@ func newTestContext(t *testing.T) *testContext {
 		PublicNamespace:              tctx.pubNamespace,
 		ListenAddr:                   ":10250",
 		TargetPollPortForwardEnabled: true,
-		TargetPollPortForwardPort:    19090,
+		TargetPollPortForwardPort:    19060,
+		TargetPollDisabled:           !useTargetPoll,
+		TargetPollNoGoogleCloudHTTP:  targetPollNoGoogleCloudHTTP,
 	})
+	if useTargetPoll {
+		t.Log("Target polling on Google Cloud:", !targetPollNoGoogleCloudHTTP, os.Getenv("GITHUB_ACTIONS"), "!")
+	} else {
+		t.Log("Target polling disabled")
+	}
 	if err != nil {
 		t.Fatalf("instantiating operator: %s", err)
 	}

@@ -110,7 +110,8 @@ kindtest:    ## Run e2e test suite against fresh kind k8s cluster.
 	@echo ">> running container"
 # We lose some isolation by sharing the host network with the kind containers.
 # However, we avoid a gcloud-shell "Dockerception" and save on build times.
-	docker run --network host --rm -v $(DOCKER_VOLUME):/var/run/docker.sock gmp/kindtest ./hack/kind-test.sh
+# Make sure we forward outer environment variables to the Docker runtime.
+	docker run --env GITHUB_ACTIONS="${GITHUB_ACTIONS}" --network host --rm -v $(DOCKER_VOLUME):/var/run/docker.sock gmp/kindtest ./hack/kind-test.sh
 
 presubmit:   ## Run all checks and tests before submitting a change 
              ## Use DRY_RUN=1 to only validate without regenerating changes.

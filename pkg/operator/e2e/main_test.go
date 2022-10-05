@@ -99,13 +99,23 @@ func TestMain(m *testing.M) {
 }
 
 func TestCollector(t *testing.T) {
+	// We only populate credentials in OperatorConfig if we have `gcpServiceAccount`
 	tctx := newTestContext(t)
+	createOperatorConfig(context.Background(), tctx, gcpServiceAccount != "")
+
+	if isGithubActions() {
+		t.Log("Running under Github Actions so target polling will be disabled")
+	}
 
 	// We could simply verify that the full collection chain works once. But validating
 	// more fine-grained stages makes debugging a lot easier.
 	t.Run("deployed", tctx.subtest(testCollectorDeployed))
-	t.Run("self-podmonitoring", tctx.subtest(testCollectorSelfPodMonitoring))
-	t.Run("self-clusterpodmonitoring", tctx.subtest(testCollectorSelfClusterPodMonitoring))
+	t.Run("self-podmonitoring", tctx.subtest(func(ctx context.Context, tctx *testContext) {
+		testCollectorSelfPodMonitoring(ctx, tctx, "self-collector-podmon", !isGithubActions())
+	}))
+	t.Run("self-clusterpodmonitoring", tctx.subtest(func(ctx context.Context, tctx *testContext) {
+		testCollectorSelfClusterPodMonitoring(ctx, tctx, "self-collector-cmon", !isGithubActions())
+	}))
 	t.Run("scrape-kubelet", tctx.subtest(testCollectorScrapeKubelet))
 }
 
@@ -557,7 +567,7 @@ func TestWebhookCABundleInjection(t *testing.T) {
 	}
 }
 
-func ensureOperatorConfigsExist(ctx context.Context, t *testContext) error {
+func createOperatorConfig(ctx context.Context, t *testContext, useCredentials bool) error {
 	_, err := t.operatorClient.MonitoringV1().OperatorConfigs(t.pubNamespace).Get(ctx, operator.NameOperatorConfig, metav1.GetOptions{})
 	if err == nil {
 		return nil
@@ -585,7 +595,7 @@ func ensureOperatorConfigsExist(ctx context.Context, t *testContext) error {
 			},
 		},
 	}
-	if gcpServiceAccount != "" {
+	if useCredentials {
 		opCfg.Collection.Credentials = &v1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{
 				Name: "user-gcp-service-account",
@@ -600,10 +610,6 @@ func ensureOperatorConfigsExist(ctx context.Context, t *testContext) error {
 // testCollectorDeployed does a high-level verification on whether the
 // collector is deployed to the cluster.
 func testCollectorDeployed(ctx context.Context, t *testContext) {
-	if err := ensureOperatorConfigsExist(ctx, t); err != nil {
-		t.Fatalf("create rules operatorconfig: %s", err)
-	}
-
 	err := wait.Poll(3*time.Second, 3*time.Minute, func() (bool, error) {
 		ds, err := t.kubeClient.AppsV1().DaemonSets(t.namespace).Get(ctx, operator.NameCollector, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
@@ -677,16 +683,12 @@ func testCollectorDeployed(ctx context.Context, t *testContext) {
 
 // testCollectorSelfPodMonitoring sets up pod monitoring of the collector itself
 // and waits for samples to become available in Cloud Monitoring.
-func testCollectorSelfPodMonitoring(ctx context.Context, t *testContext) {
-	if err := ensureOperatorConfigsExist(ctx, t); err != nil {
-		t.Fatalf("create rules operatorconfig: %s", err)
-	}
-
+func testCollectorSelfPodMonitoring(ctx context.Context, t *testContext, name string, testTargetStatus bool) {
 	// The operator should configure the collector to scrape itself and its metrics
 	// should show up in Cloud Monitoring shortly after.
 	podmon := &monitoringv1.PodMonitoring{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "collector-podmon",
+			Name: name,
 		},
 		Spec: monitoringv1.PodMonitoringSpec{
 			Selector: metav1.LabelSelector{
@@ -705,11 +707,11 @@ func testCollectorSelfPodMonitoring(ctx context.Context, t *testContext) {
 	if err != nil {
 		t.Fatalf("create collector PodMonitoring: %s", err)
 	}
-	t.Log("Waiting for PodMonitoring collector-podmon to be processed")
+	t.Logf("Waiting for PodMonitoring %s to be processed", name)
 
 	var resVer = ""
 	err = wait.Poll(time.Second, 1*time.Minute, func() (bool, error) {
-		pm, err := t.operatorClient.MonitoringV1().PodMonitorings(t.namespace).Get(ctx, "collector-podmon", metav1.GetOptions{})
+		pm, err := t.operatorClient.MonitoringV1().PodMonitorings(t.namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, errors.Errorf("getting PodMonitoring failed: %s", err)
 		}
@@ -733,35 +735,33 @@ func testCollectorSelfPodMonitoring(ctx context.Context, t *testContext) {
 	if err != nil {
 		t.Errorf("unable to validate PodMonitoring status: %s", err)
 	}
-	err = checkEndpointStatus(t.T, func() (monitoringv1.PodMonitoringStatusContainer, error) {
-		pm, err := t.operatorClient.MonitoringV1().PodMonitorings(t.namespace).Get(ctx, "collector-podmon", metav1.GetOptions{})
+	if testTargetStatus {
+		err = checkEndpointStatus(t.T, func() (monitoringv1.PodMonitoringStatusContainer, error) {
+			pm, err := t.operatorClient.MonitoringV1().PodMonitorings(t.namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return nil, errors.Errorf("getting PodMonitoring failed: %s", err)
+			}
+			return pm, nil
+		})
 		if err != nil {
-			return nil, errors.Errorf("getting PodMonitoring failed: %s", err)
+			t.Errorf("unable to validate target status: %s", err)
 		}
-		return pm, nil
-	})
-	if err != nil {
-		t.Errorf("unable to validate target status: %s", err)
 	}
 
 	if !skipGCM {
 		t.Log("Waiting for up metrics for collector targets")
-		validateCollectorUpMetrics(ctx, t, "collector-podmon")
+		validateCollectorUpMetrics(ctx, t, name)
 	}
 }
 
 // testCollectorSelfClusterPodMonitoring sets up pod monitoring of the collector itself
 // and waits for samples to become available in Cloud Monitoring.
-func testCollectorSelfClusterPodMonitoring(ctx context.Context, t *testContext) {
-	if err := ensureOperatorConfigsExist(ctx, t); err != nil {
-		t.Fatalf("create rules operatorconfig: %s", err)
-	}
-
+func testCollectorSelfClusterPodMonitoring(ctx context.Context, t *testContext, name string, testTargetStatus bool) {
 	// The operator should configure the collector to scrape itself and its metrics
 	// should show up in Cloud Monitoring shortly after.
 	podmon := &monitoringv1.ClusterPodMonitoring{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            "collector-cmon",
+			Name:            name,
 			OwnerReferences: t.ownerReferences,
 		},
 		Spec: monitoringv1.ClusterPodMonitoringSpec{
@@ -781,11 +781,11 @@ func testCollectorSelfClusterPodMonitoring(ctx context.Context, t *testContext) 
 	if err != nil {
 		t.Fatalf("create collector ClusterPodMonitoring: %s", err)
 	}
-	t.Log("Waiting for ClusterPodMonitoring collector-cmon to be processed")
+	t.Logf("Waiting for ClusterPodMonitoring %s to be processed", name)
 
 	var resVer = ""
 	err = wait.Poll(time.Second, 1*time.Minute, func() (bool, error) {
-		pm, err := t.operatorClient.MonitoringV1().ClusterPodMonitorings().Get(ctx, "collector-cmon", metav1.GetOptions{})
+		pm, err := t.operatorClient.MonitoringV1().ClusterPodMonitorings().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, errors.Errorf("getting ClusterPodMonitoring failed: %s", err)
 		}
@@ -809,20 +809,22 @@ func testCollectorSelfClusterPodMonitoring(ctx context.Context, t *testContext) 
 	if err != nil {
 		t.Errorf("unable to validate ClusterPodMonitoring status: %s", err)
 	}
-	err = checkEndpointStatus(t.T, func() (monitoringv1.PodMonitoringStatusContainer, error) {
-		pm, err := t.operatorClient.MonitoringV1().ClusterPodMonitorings().Get(ctx, "collector-cmon", metav1.GetOptions{})
+	if testTargetStatus {
+		err = checkEndpointStatus(t.T, func() (monitoringv1.PodMonitoringStatusContainer, error) {
+			pm, err := t.operatorClient.MonitoringV1().ClusterPodMonitorings().Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return nil, errors.Errorf("getting PodMonitoring failed: %s", err)
+			}
+			return pm, nil
+		})
 		if err != nil {
-			return nil, errors.Errorf("getting PodMonitoring failed: %s", err)
+			t.Errorf("unable to validate target status: %s", err)
 		}
-		return pm, nil
-	})
-	if err != nil {
-		t.Errorf("unable to validate target status: %s", err)
 	}
 
 	if !skipGCM {
 		t.Log("Waiting for up metrics for collector targets")
-		validateCollectorUpMetrics(ctx, t, "collector-cmon")
+		validateCollectorUpMetrics(ctx, t, name)
 	}
 }
 
