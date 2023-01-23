@@ -37,10 +37,6 @@ import (
 	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/operator"
 )
 
-func unstableFlagHelp(help string) string {
-	return help + " (Setting this flag voids any guarantees of proper behavior of the operator.)"
-}
-
 func main() {
 	var (
 		defaultProjectID string
@@ -138,7 +134,9 @@ func main() {
 			return server.ListenAndServe()
 		}, func(err error) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			server.Shutdown(ctx)
+			if err := server.Shutdown(ctx); err != nil {
+				logger.Error(err, "unable to shut down server")
+			}
 			cancel()
 		})
 	}

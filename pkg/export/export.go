@@ -38,6 +38,7 @@ import (
 	"google.golang.org/api/option"
 	monitoring_pb "google.golang.org/genproto/googleapis/monitoring/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip"
 )
 
@@ -245,7 +246,7 @@ func newMetricClient(ctx context.Context, opts ExporterOpts) (*monitoring.Metric
 	if opts.DisableAuth {
 		clientOpts = append(clientOpts,
 			option.WithoutAuthentication(),
-			option.WithGRPCDialOption(grpc.WithInsecure()),
+			option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
 		)
 	}
 	if opts.CredentialsFile != "" {

@@ -37,6 +37,7 @@ import (
 	"github.com/go-kit/log/level"
 	"github.com/oklog/run"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/api/option"
 	apihttp "google.golang.org/api/transport/http"
@@ -74,8 +75,8 @@ func main() {
 
 	metrics := prometheus.NewRegistry()
 	metrics.MustRegister(
-		prometheus.NewGoCollector(),
-		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
 	if *projectID == "" {
@@ -148,7 +149,9 @@ func main() {
 			return server.ListenAndServe()
 		}, func(err error) {
 			ctx, _ = context.WithTimeout(ctx, time.Minute)
-			server.Shutdown(ctx)
+			if err := server.Shutdown(ctx); err != nil {
+				level.Error(logger).Log("msg", "unable to shut down server", "err", err)
+			}
 			cancel()
 		})
 	}

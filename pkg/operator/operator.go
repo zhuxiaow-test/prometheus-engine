@@ -394,7 +394,9 @@ func (o *Operator) Run(ctx context.Context, registry prometheus.Registerer) erro
 	o.logger.Info("starting GMP operator")
 
 	go func() {
-		o.managedNamespacesCache.Start(ctx)
+		if err := o.managedNamespacesCache.Start(ctx); err != nil {
+			o.logger.Error(err, "unable to start managed namespaces cache")
+		}
 	}()
 	return o.manager.Start(ctx)
 }

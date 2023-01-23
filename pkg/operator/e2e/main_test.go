@@ -165,7 +165,7 @@ route:
 	spec := &monitoringv1.ManagedAlertmanagerSpec{
 		ConfigSecret: &v1.SecretKeySelector{
 			LocalObjectReference: v1.LocalObjectReference{
-				"my-secret-name",
+				Name: "my-secret-name",
 			},
 			Key: "my-secret-key",
 		},
