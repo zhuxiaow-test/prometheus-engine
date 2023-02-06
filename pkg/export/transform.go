@@ -23,6 +23,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-kit/log"
+
+	"github.com/go-kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/model/labels"
@@ -70,12 +73,14 @@ func discardExemplarIncIfExists(series storage.SeriesRef, exemplars map[storage.
 }
 
 type sampleBuilder struct {
+	logger log.Logger
 	series *seriesCache
 	dists  map[uint64]*distribution
 }
 
-func newSampleBuilder(c *seriesCache) *sampleBuilder {
+func newSampleBuilder(c *seriesCache, logger log.Logger) *sampleBuilder {
 	return &sampleBuilder{
+		logger: logger,
 		series: c,
 		dists:  make(map[uint64]*distribution, 128),
 	}
@@ -374,6 +379,7 @@ func (b *sampleBuilder) buildDistribution(
 	externalLabels labels.Labels,
 	metadata MetadataFunc,
 ) (*distribution_pb.Distribution, int64, []record.RefSample, error) {
+	level.Info(b.logger).Log("DEBUG MSG", "buildDistribution", "exemplarMap", exemplars)
 	// The Prometheus/OpenMetrics exposition format does not require all histogram series for a single distribution
 	// to be grouped together. But it does require that all series for a histogram metric in general are grouped
 	// together and that buckets for a single histogram are specified in order.
@@ -451,8 +457,11 @@ Loop:
 			}
 			dist.bounds = append(dist.bounds, bound)
 			dist.values = append(dist.values, int64(v))
+			level.Info(b.logger).Log("msg", "DEBUG IF EXEMPLAR", "s.Ref", s.Ref, "labels", e.lset.String())
 			if exemplar, ok := exemplars[storage.SeriesRef(s.Ref)]; ok {
+				level.Info(b.logger).Log("msg", "DEBUG YES EXEMPLAR!", "s.Ref", s.Ref, "labels", e.lset.String(), "exemplar", exemplar)
 				dist.exemplars = append(dist.exemplars, exemplar)
+				level.Info(b.logger).Log("msg", "DEBUG EXEMPLAR ADDED TO DIST", "dist", dist)
 			}
 
 		default:
