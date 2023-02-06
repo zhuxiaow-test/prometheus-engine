@@ -236,6 +236,7 @@ type distribution struct {
 func (d *distribution) reset() {
 	d.bounds = d.bounds[:0]
 	d.values = d.values[:0]
+	d.exemplars = d.exemplars[:0]
 	d.sum, d.count = 0, 0
 	d.hasSum, d.hasCount, d.hasInfBucket = false, false, false
 	d.timestamp, d.resetTimestamp = 0, 0
