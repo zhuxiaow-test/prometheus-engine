@@ -16,12 +16,21 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	cryptorand "crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"math/rand"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -45,6 +54,13 @@ var (
 	gaugeCount   = flag.Int("gauge-count", -1, "Number of unique instances per gauge metric.")
 	counterCount = flag.Int("counter-count", -1, "Number of unique instances per counter metric.")
 	summaryCount = flag.Int("summary-count", -1, "Number of unique instances per summary metric.")
+
+	tlsCert             = flag.String("tls-cert", "", "Path to the server TLS certificate")
+	tlsKey              = flag.String("tls-key", "", "Path to the server TLS key")
+	tlsCreateSelfSigned = flag.Bool("tls-create-self-signed", false, "If true, a self-signed certificate will be created and used as the TLS server certificate.")
+	tlsServerName       = flag.String("tls-server-name", "Example", "Name of the server, used to verify the TLS certificate")
+	tlsServerIP         = flag.String("tls-server-ip", "", "IP of the server, used when creating a self-signed TLS certificate")
+	insecureSkipVerify  = flag.Bool("insecure-skip-verify", false, "Whether to skip verifying the certificate")
 
 	omStateSetCount       = flag.Int("om-stateset-count", -1, "Number of OpenMetrics StateSet metrics (https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md#stateset). Requires OpenMetrics format to be negotiated.")
 	omInfoCount           = flag.Int("om-info-count", -1, "Number of OpenMetrics Info metrics (https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md#stateset). Requires OpenMetrics format to be negotiated.")
@@ -171,8 +187,35 @@ var (
 	)
 )
 
+func validateFlags() error {
+	errList := []error{}
+	if *tlsCreateSelfSigned {
+		if *tlsCert != "" {
+			errList = append(errList, errors.New("--tls-create-self-signed and --tls-cert cannot be used together"))
+		}
+		if *tlsKey != "" {
+			errList = append(errList, errors.New("--tls-create-self-signed and --tls-key cannot be used together"))
+		}
+		if *tlsServerIP == "" {
+			*tlsServerIP = os.Getenv("POD_IP")
+		}
+	} else if *tlsServerIP != "" {
+		errList = append(errList, errors.New("--tls-server-ip can only be specified with --tls-create-self-signed"))
+	}
+	if (*tlsCert != "" || *tlsKey != "") && (*tlsCert == "" || *tlsKey == "") {
+		errList = append(errList, errors.New("--tls-cert and --tls-key must both be set"))
+	}
+
+	return errors.Join(errList...)
+}
+
 func main() {
 	flag.Parse()
+
+	if err := validateFlags(); err != nil {
+		log.Println("Invalid flags", err)
+		os.Exit(1)
+	}
 
 	metrics := prometheus.NewRegistry()
 	metrics.MustRegister(
@@ -217,10 +260,85 @@ func main() {
 		)
 	}
 	{
-		server := &http.Server{Addr: *addr}
+		var tlsConfig *tls.Config = nil
+		if *tlsCreateSelfSigned {
+			publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
+			if err != nil {
+				log.Println("Unable to generate key", err)
+				os.Exit(1)
+			}
+
+			template := x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject: pkix.Name{
+					Organization: []string{*tlsServerName},
+				},
+				NotBefore: time.Now(),
+				NotAfter:  time.Now().Add(time.Hour * 24 * 30),
+
+				KeyUsage:              x509.KeyUsageDigitalSignature,
+				ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				BasicConstraintsValid: true,
+			}
+			if *tlsServerIP != "" {
+				template.IPAddresses = append(template.IPAddresses, net.ParseIP(*tlsServerIP))
+			}
+
+			certBytes, err := x509.CreateCertificate(cryptorand.Reader, &template, &template, publicKey, privateKey)
+			if err != nil {
+				log.Println("Unable to create self-signed certificate", err)
+				os.Exit(1)
+			}
+			certPem := pem.EncodeToMemory(&pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: certBytes,
+			})
+
+			privateKeyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+			if err != nil {
+				log.Println("Unable to marshal private key", err)
+				os.Exit(1)
+			}
+			privateKeyPem := pem.EncodeToMemory(&pem.Block{
+				Type:  "PRIVATE KEY",
+				Bytes: privateKeyBytes,
+			})
+
+			cert, err := tls.X509KeyPair(certPem, privateKeyPem)
+			if err != nil {
+				log.Println("Unable to encode self-signed certificate", err)
+				os.Exit(1)
+			}
+
+			tlsConfig = &tls.Config{
+				Certificates:       []tls.Certificate{cert},
+				ServerName:         *tlsServerName,
+				InsecureSkipVerify: *insecureSkipVerify,
+			}
+		} else if *tlsCert != "" {
+			cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+			if err != nil {
+				log.Println("Unable to load server cert and key", err)
+				os.Exit(1)
+			}
+
+			tlsConfig = &tls.Config{
+				Certificates:       []tls.Certificate{cert},
+				ServerName:         *tlsServerName,
+				InsecureSkipVerify: *insecureSkipVerify,
+			}
+		}
+
+		server := &http.Server{
+			Addr:      *addr,
+			TLSConfig: tlsConfig,
+		}
 		http.Handle("/metrics", promhttp.HandlerFor(metrics, promhttp.HandlerOpts{Registry: metrics, EnableOpenMetrics: true}))
 
 		g.Add(func() error {
+			if server.TLSConfig != nil {
+				return server.ListenAndServeTLS("", "")
+			}
 			return server.ListenAndServe()
 		}, func(err error) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
