@@ -27,6 +27,7 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/tsdb/chunkenc"
 )
 
 // convert storage.SeriesSet to promql.Matrix.
@@ -34,9 +35,9 @@ func expandSeriesSet(s storage.SeriesSet) promql.Matrix {
 	m := promql.Matrix{}
 	for s.Next() {
 		storageSeries := s.At()
-		it := storageSeries.Iterator()
+		it := storageSeries.Iterator(nil)
 		pts := []promql.Point{}
-		for it.Next() {
+		for it.Next() != chunkenc.ValNone {
 			t, v := it.At()
 			pts = append(pts, promql.Point{
 				T: t,

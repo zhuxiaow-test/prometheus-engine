@@ -29,6 +29,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 	exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
@@ -37,7 +38,6 @@ import (
 	"google.golang.org/api/option"
 	apihttp "google.golang.org/api/transport/http"
 	"google.golang.org/grpc"
-	"gopkg.in/alecthomas/kingpin.v2"
 
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
